@@ -1,0 +1,142 @@
+import pandas as pd
+import requests
+import sys
+import matplotlib.pyplot as plt
+import re
+import os
+
+def clean_gross_column(gross_str):
+    if pd.isna(gross_str):
+        return None
+    
+    gross_str = str(gross_str)
+    gross_str = re.sub(r'[₹$]|\s*(crore|million|billion)\s*', '', gross_str, flags=re.IGNORECASE)
+    gross_str = re.sub(r'[^\d.]', '', gross_str)
+    
+    try:
+        if gross_str:
+            return float(gross_str)
+    except ValueError:
+        pass
+    return None
+
+def scrape_and_plot_movies():
+    URL = "https://en.wikipedia.org/wiki/List_of_highest-grossing_Telugu_films"
+    save_path = r"C:\movie_data1"
+    os.makedirs(save_path, exist_ok=True)
+
+    excel_filename = os.path.join(save_path, "highest_grossing_telugu_films.xlsx")
+    headers = {'User-Agent': 'Mozilla/5.0'}
+
+    print(f"Scraping data from {URL}...")
+    
+    try:
+        response = requests.get(URL, headers=headers)
+        response.raise_for_status()
+        tables = pd.read_html(response.text)
+        
+        print(f"✅ Found {len(tables)} tables.")
+        if not tables:
+            print("❌ No tables found on the page.")
+            return
+        
+        movie_table = tables[0]  # First table has main data
+        print("✅ Table successfully extracted.")
+
+        # --- Identify columns dynamically ---
+        film_col = next((c for c in movie_table.columns if "film" in str(c).lower()), movie_table.columns[0])
+        gross_col = next((c for c in movie_table.columns if "gross" in str(c).lower()), movie_table.columns[-1])
+        year_col = next((c for c in movie_table.columns if "year" in str(c).lower()), None)
+        actor_col = next((c for c in movie_table.columns if "actor" in str(c).lower() or "star" in str(c).lower()), None)
+        franchise_col = next((c for c in movie_table.columns if "franchise" in str(c).lower()), None)
+
+        print(f"\nColumns detected:\n Film: {film_col}\n Gross: {gross_col}\n Year: {year_col}\n Actor: {actor_col}\n Franchise: {franchise_col}")
+
+        # --- Clean data ---
+        movie_table["Gross_Numeric"] = movie_table[gross_col].apply(clean_gross_column)
+        movie_table = movie_table.dropna(subset=["Gross_Numeric"])
+
+        # Extract numeric years if present
+        if year_col:
+            movie_table["Year_Clean"] = movie_table[year_col].astype(str).str.extract(r'(\d{4})')
+
+        # Save cleaned data
+        movie_table.to_excel(excel_filename, index=False)
+        print(f"✅ Cleaned data saved to: {excel_filename}")
+
+        print("\n📊 Generating graphs...")
+
+        # 1️⃣ Top 10 Highest-Grossing Films
+        top_10 = movie_table.nlargest(10, "Gross_Numeric")
+        plt.figure(figsize=(12, 7))
+        plt.bar(top_10[film_col], top_10["Gross_Numeric"], color='skyblue')
+        plt.title("Top 10 Highest-Grossing Telugu Films")
+        plt.ylabel("Gross (₹ crore)")
+        plt.xticks(rotation=45, ha='right')
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_path, "graph_top10_films.png"))
+        plt.close()
+        print("✅ Saved: Top 10 Films")
+
+        # 2️⃣ Gross by Year
+        if "Year_Clean" in movie_table:
+            gross_by_year = movie_table.groupby("Year_Clean")["Gross_Numeric"].sum().sort_index()
+            plt.figure(figsize=(10, 6))
+            gross_by_year.plot(kind="bar", color='orange')
+            plt.title("Total Box Office Gross by Year")
+            plt.ylabel("Total Gross (₹ crore)")
+            plt.xlabel("Year")
+            plt.tight_layout()
+            plt.savefig(os.path.join(save_path, "graph_gross_by_year.png"))
+            plt.close()
+            print("✅ Saved: Gross by Year")
+
+        # 3️⃣ Number of High-Grossing Films per Year
+        if "Year_Clean" in movie_table:
+            films_per_year = movie_table.groupby("Year_Clean")[film_col].count()
+            plt.figure(figsize=(10, 6))
+            films_per_year.plot(kind="bar", color='green')
+            plt.title("Number of High-Grossing Films per Year")
+            plt.ylabel("Count")
+            plt.xlabel("Year")
+            plt.tight_layout()
+            plt.savefig(os.path.join(save_path, "graph_films_per_year.png"))
+            plt.close()
+            print("✅ Saved: Films per Year")
+
+        # 4️⃣ Top Actors by Number of Movies (if available)
+        if actor_col and actor_col in movie_table.columns:
+            actors = movie_table[actor_col].dropna().astype(str)
+            actor_counts = actors.value_counts().nlargest(10)
+            plt.figure(figsize=(10, 6))
+            actor_counts.plot(kind="bar", color='purple')
+            plt.title("Top 10 Actors by Number of High-Grossing Films")
+            plt.ylabel("Count")
+            plt.xticks(rotation=45, ha='right')
+            plt.tight_layout()
+            plt.savefig(os.path.join(save_path, "graph_top_actors.png"))
+            plt.close()
+            print("✅ Saved: Top Actors")
+
+        # 5️⃣ Gross by Franchise (if available)
+        if franchise_col and franchise_col in movie_table.columns:
+            franchise_gross = movie_table.groupby(franchise_col)["Gross_Numeric"].sum().nlargest(10)
+            plt.figure(figsize=(12, 6))
+            franchise_gross.plot(kind="bar", color='red')
+            plt.title("Top 10 Highest-Grossing Telugu Franchises")
+            plt.ylabel("Total Gross (₹ crore)")
+            plt.xticks(rotation=45, ha='right')
+            plt.tight_layout()
+            plt.savefig(os.path.join(save_path, "graph_franchise_gross.png"))
+            plt.close()
+            print("✅ Saved: Gross by Franchise")
+
+        print("\n🎉 All graphs generated successfully!")
+
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Request error: {e}", file=sys.stderr)
+    except Exception as e:
+        print(f"❌ Unexpected error: {e}", file=sys.stderr)
+
+if __name__ == "__main__":
+    scrape_and_plot_movies()
